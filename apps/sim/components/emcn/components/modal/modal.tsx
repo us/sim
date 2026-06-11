@@ -44,6 +44,7 @@ import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/core/utils/cn'
 import { Button } from '../button/button'
 import { focusFirstTextInput, focusFirstTextInputIn } from './auto-focus'
+import { InsideModalProvider } from './modal-context'
 
 /**
  * Shared animation classes for modal transitions.
@@ -241,10 +242,12 @@ const ModalContent = React.forwardRef<
             aria-describedby={ariaDescribedBy}
             {...props}
           >
-            {srTitle ? (
-              <DialogPrimitive.Title className='sr-only'>{srTitle}</DialogPrimitive.Title>
-            ) : null}
-            {children}
+            <InsideModalProvider value={true}>
+              {srTitle ? (
+                <DialogPrimitive.Title className='sr-only'>{srTitle}</DialogPrimitive.Title>
+              ) : null}
+              {children}
+            </InsideModalProvider>
           </DialogPrimitive.Content>
         </div>
       </ModalPortal>
