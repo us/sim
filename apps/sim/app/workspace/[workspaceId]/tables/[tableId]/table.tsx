@@ -420,7 +420,7 @@ export function Table({
     () => [
       { label: 'Tables', onClick: handleNavigateBack },
       {
-        label: tableData?.name ?? '',
+        label: tableData?.name ?? '…',
         editing: tableHeaderRename.editingId
           ? {
               isEditing: true,
@@ -525,7 +525,7 @@ export function Table({
   const { data: executionLog } = useLogByExecutionId(workspaceId, executionId)
 
   return (
-    <div className='relative flex h-full flex-col overflow-hidden'>
+    <Resource>
       {!embedded && (
         <Resource.Header
           icon={TableIcon}
@@ -794,6 +794,6 @@ export function Table({
           }}
         />
       )}
-    </div>
+    </Resource>
   )
 }
