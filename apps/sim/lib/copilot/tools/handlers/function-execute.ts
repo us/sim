@@ -3,7 +3,10 @@ import { decodeVfsPathSegments, encodeVfsPathSegments } from '@/lib/copilot/vfs/
 import { resolveWorkflowAliasForWorkspace } from '@/lib/copilot/vfs/workflow-alias-resolver'
 import { isPlanAliasPath, workflowAliasSandboxPath } from '@/lib/copilot/vfs/workflow-aliases'
 import { isMothershipBetaFeaturesEnabled } from '@/lib/core/config/feature-flags'
-import { getTableById, listTables, queryRows } from '@/lib/table/service'
+import { buildNameById, rowDataIdToName } from '@/lib/table/column-keys'
+import { toCsvRow } from '@/lib/table/export-format'
+import { getTableById, listTables, selectExportRowPage } from '@/lib/table/service'
+import type { TableDefinition } from '@/lib/table/types'
 import { listWorkspaceFileFolders } from '@/lib/uploads/contexts/workspace/workspace-file-folder-manager'
 import {
   fetchWorkspaceFileBuffer,
@@ -60,6 +63,44 @@ async function resolveTableRef(
   const tableName = tableNameFromVfsPath(tableRef)
   if (!tableName) return null
   return tablePathLookup?.get(tableName) ?? null
+}
+
+const TABLE_MOUNT_PAGE_SIZE = 5000
+
+/**
+ * Serializes a cell for a sandbox CSV mount. Unlike export downloads this skips
+ * formula neutralization — the CSV is consumed by code, and a prefixed `'`
+ * would corrupt values.
+ */
+function formatMountCsvValue(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  if (value instanceof Date) return value.toISOString()
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+/**
+ * Serializes a full table to CSV for a sandbox mount. Walks the keyset export
+ * reader page by page so every row is included (`queryRows` with defaults
+ * silently truncated mounts to its 100-row page and paid for a count and
+ * execution metadata the CSV never used), and remaps stored column-id keys
+ * back to display names so headers line up with cell values.
+ */
+async function buildTableCsvForMount(table: TableDefinition): Promise<string> {
+  const nameById = buildNameById(table.schema)
+  const headers = table.schema.columns.map((c) => c.name)
+  const lines = [toCsvRow(headers)]
+  let after: { position: number; id: string } | null = null
+  while (true) {
+    const page = await selectExportRowPage(table, after, TABLE_MOUNT_PAGE_SIZE)
+    for (const row of page) {
+      const data = rowDataIdToName(row.data, nameById)
+      lines.push(toCsvRow(headers.map((header) => formatMountCsvValue(data[header]))))
+    }
+    if (page.length < TABLE_MOUNT_PAGE_SIZE) return lines.join('\n')
+    const last = page[page.length - 1]
+    after = { position: last.position, id: last.id }
+  }
 }
 
 async function resolveInputFiles(
@@ -247,55 +288,41 @@ async function resolveInputFiles(
     const tablePathLookup = hasTablePathRefs
       ? new Map((await listTables(workspaceId)).map((table) => [table.name, table]))
       : undefined
-    for (const tableRef of inputTables) {
-      const tableId =
-        typeof tableRef === 'string'
-          ? tableRef
-          : tableRef && typeof tableRef === 'object'
-            ? (tableRef as CanonicalTableInput).tableId || (tableRef as CanonicalTableInput).path
-            : undefined
-      if (!tableId) continue
-      const table = await resolveTableRef(tableId, tablePathLookup)
-      if (!table || table.workspaceId !== workspaceId) {
-        throw new Error(
-          `Input table not found: "${tableId}". Pass the table id (tbl_...) from tables/{name}/meta.json, or a tables/{name}/meta.json path.`
-        )
-      }
-      const rows = await queryRows(table, {}, 'copilot-fn-exec')
-
-      const allKeys = new Set(table.schema.columns.map((column) => column.name))
-      for (const row of rows.rows ?? []) {
-        if (row.data && typeof row.data === 'object') {
-          for (const key of Object.keys(row.data as Record<string, unknown>)) {
-            allKeys.add(key)
-          }
+    const tableMounts = await Promise.all(
+      inputTables.map(async (tableRef) => {
+        const tableId =
+          typeof tableRef === 'string'
+            ? tableRef
+            : tableRef && typeof tableRef === 'object'
+              ? (tableRef as CanonicalTableInput).tableId || (tableRef as CanonicalTableInput).path
+              : undefined
+        if (!tableId) return null
+        const table = await resolveTableRef(tableId, tablePathLookup)
+        if (!table || table.workspaceId !== workspaceId) {
+          throw new Error(
+            `Input table not found: "${tableId}". Pass the table id (tbl_...) from tables/{name}/meta.json, or a tables/{name}/meta.json path.`
+          )
         }
-      }
-      const headers = Array.from(allKeys)
-      const csvLines = [headers.join(',')]
-      for (const row of rows.rows ?? []) {
-        const data = (row.data || {}) as Record<string, unknown>
-        csvLines.push(
-          headers
-            .map((h) => {
-              const val = data[h]
-              const str = val === null || val === undefined ? '' : String(val)
-              return str.includes(',') || str.includes('"') || str.includes('\n')
-                ? `"${str.replace(/"/g, '""')}"`
-                : str
-            })
-            .join(',')
+        const csvContent = await buildTableCsvForMount(table)
+        const sandboxPath =
+          typeof tableRef === 'object' && tableRef !== null
+            ? (tableRef as CanonicalTableInput).sandboxPath
+            : undefined
+        return {
+          path: sandboxPath || `/home/user/tables/${table.id}.csv`,
+          content: csvContent,
+        }
+      })
+    )
+    for (const mount of tableMounts) {
+      if (!mount) continue
+      if (totalSize + mount.content.length > MAX_TOTAL_SIZE) {
+        throw new Error(
+          `Mounting table "${mount.path}" would exceed the ${MAX_TOTAL_SIZE / 1024 / 1024}MB total mount limit. Mount fewer or smaller tables.`
         )
       }
-      const csvContent = csvLines.join('\n')
-      const sandboxPath =
-        typeof tableRef === 'object' && tableRef !== null
-          ? (tableRef as CanonicalTableInput).sandboxPath
-          : undefined
-      sandboxFiles.push({
-        path: sandboxPath || `/home/user/tables/${table.id}.csv`,
-        content: csvContent,
-      })
+      totalSize += mount.content.length
+      sandboxFiles.push(mount)
     }
   }
 

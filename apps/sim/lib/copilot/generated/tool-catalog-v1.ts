@@ -3868,6 +3868,22 @@ export const UserTable: ToolCatalogEntry = {
         type: 'object',
         description: 'Arguments for the operation',
         properties: {
+          after: {
+            type: 'object',
+            description:
+              "Keyset cursor for query_rows: pass the nextCursor object ({ orderKey, id }) from the previous page's response to fetch the next page on the default row order. Cannot be combined with sort; takes precedence over offset.",
+            properties: {
+              id: {
+                type: 'string',
+                description: 'id of the last row of the previous page (from nextCursor).',
+              },
+              orderKey: {
+                type: 'string',
+                description: 'orderKey of the last row of the previous page (from nextCursor).',
+              },
+            },
+            required: ['orderKey', 'id'],
+          },
           autoRun: {
             type: 'boolean',
             description:
@@ -3956,7 +3972,8 @@ export const UserTable: ToolCatalogEntry = {
           },
           limit: {
             type: 'number',
-            description: 'Maximum rows to return or affect (optional, default 100)',
+            description:
+              'Maximum rows to return or affect (optional; default 100, max 1000). For delete_rows_by_filter, omitting it lets matches above 1000 run as a background job.',
           },
           mapping: {
             type: 'object',
@@ -4009,7 +4026,8 @@ export const UserTable: ToolCatalogEntry = {
           },
           offset: {
             type: 'number',
-            description: 'Number of rows to skip (optional for query_rows, default 0)',
+            description:
+              'Number of rows to skip (optional for query_rows, default 0). For paging past more than a few pages, prefer the after cursor — offset re-scans every prior row.',
           },
           outputColumnNames: {
             type: 'object',
@@ -4146,6 +4164,7 @@ export const UserTable: ToolCatalogEntry = {
           'import_file',
           'get',
           'get_schema',
+          'get_job',
           'delete',
           'rename',
           'insert_row',
@@ -4524,6 +4543,7 @@ export const UserTableOperation = {
   importFile: 'import_file',
   get: 'get',
   getSchema: 'get_schema',
+  getJob: 'get_job',
   delete: 'delete',
   rename: 'rename',
   insertRow: 'insert_row',
@@ -4560,6 +4580,7 @@ export const UserTableOperationValues = [
   UserTableOperation.importFile,
   UserTableOperation.get,
   UserTableOperation.getSchema,
+  UserTableOperation.getJob,
   UserTableOperation.delete,
   UserTableOperation.rename,
   UserTableOperation.insertRow,
